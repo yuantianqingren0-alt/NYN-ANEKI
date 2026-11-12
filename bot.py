@@ -1,43 +1,33 @@
-# Python 3.10+ | discord.py 2.x
 import os
-import asyncio
+import threading
 import discord
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
-from aiohttp import web
 
+# 最初に環境変数を読み込む
 load_dotenv()
 
-TOKEN        = os.environ["DISCORD_BOT_TOKEN"]
-CLIENT_ID    = os.environ["DISCORD_CLIENT_ID"]
-WEB_BASE_URL = os.environ["WEB_BASE_URL"]
-PORT         = int(os.environ.get("PORT", 10000))  # Renderが注入するポート
+# 環境変数が読み込まれた後に web.py をインポート
+from web import app as flask_app
 
-ROLE_NAME = "認証済み"
+TOKEN        = os.environ.get("DISCORD_BOT_TOKEN", "")
+CLIENT_ID    = os.environ.get("DISCORD_CLIENT_ID", "")
+WEB_BASE_URL = os.environ.get("WEB_BASE_URL", "").rstrip("/")
+PORT         = int(os.environ.get("PORT", 10000))
+ROLE_NAME    = "認証済み"
 
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds  = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ── Flaskを別スレッドで起動 ─────────────────────────────────────
+def run_flask():
+    print(f"[web] starting Flask on port {PORT}")
+    flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False)
 
-# ── ヘルスチェック用HTTPサーバー ──────────────────────────────────
-async def health(request):
-    return web.Response(text="OK")
-
-async def start_health_server():
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    print(f"[health] listening on 0.0.0.0:{PORT}")
-
-
-# ── 以下、既存のイベント・コマンド ───────────────────────────────
+# ── Botのイベント・コマンド ──────────────────────────────────────
 @bot.event
 async def on_guild_join(guild: discord.Guild):
     await ensure_role(guild)
@@ -45,20 +35,25 @@ async def on_guild_join(guild: discord.Guild):
 async def ensure_role(guild: discord.Guild) -> discord.Role:
     role = discord.utils.get(guild.roles, name=ROLE_NAME)
     if role is None:
-        role = await guild.create_role(
-            name=ROLE_NAME,
-            colour=discord.Colour.green(),
-            reason="認証システム自動作成",
-        )
+        try:
+            role = await guild.create_role(name=ROLE_NAME, colour=discord.Colour.green(), reason="認証システム自動作成")
+        except Exception as e:
+            print(f"[warn] role create failed: {e}")
     return role
 
 @bot.event
 async def on_ready():
     print(f"Bot ready: {bot.user} ({bot.user.id})")
     for guild in bot.guilds:
-        await ensure_role(guild)
-    await bot.tree.sync()
-    print("Slash commands synced.")
+        try:
+            await ensure_role(guild)
+        except Exception as e:
+            print(f"[warn] ensure_role failed: {e}")
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.")
+    except Exception as e:
+        print(f"[warn] tree sync failed: {e}")
 
 @bot.tree.command(name="auth", description="認証パネルを表示します")
 @app_commands.checks.has_permissions(administrator=True)
@@ -67,11 +62,7 @@ async def auth_command(interaction: discord.Interaction):
     await interaction.response.send_message(
         embed=discord.Embed(
             title="✅ 認証",
-            description=(
-                "このサーバーに参加するには認証が必要です。\n\n"
-                "下の **「認証する」** ボタンをタップしてください。\n"
-                "タップすると **認証済み** ロールが付与されます。"
-            ),
+            description="このサーバーに参加するには認証が必要です。\n\n下の **「認証する」** ボタンをタップしてください。\nタップすると **認証済み** ロールが付与されます。",
             colour=discord.Colour.blurple(),
         ),
         view=view,
@@ -96,10 +87,7 @@ class AuthStartView(discord.ui.View):
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="🌐 認証を完了してください",
-                description=(
-                    "下のボタンから認証ページへ進んでください。\n"
-                    "Discord アカウントでログインし、**メールアドレスの共有を許可**してください。"
-                ),
+                description="下のボタンから認証ページへ進んでください。\nDiscord アカウントでログインし、**メールアドレスの共有を許可**してください。",
                 colour=discord.Colour.green(),
             ),
             view=view,
@@ -109,18 +97,12 @@ class AuthStartView(discord.ui.View):
 class AuthWebView(discord.ui.View):
     def __init__(self, url: str):
         super().__init__(timeout=300)
-        self.add_item(discord.ui.Button(
-            label="認証ページへ進む",
-            style=discord.ButtonStyle.link,
-            url=url,
-            emoji="🔗",
-        ))
-
+        self.add_item(discord.ui.Button(label="認証ページへ進む", style=discord.ButtonStyle.link, url=url, emoji="🔗"))
 
 # ── 起動 ──────────────────────────────────────────────────────────
-async def main():
-    await start_health_server()   # 先にポートを開く
-    await bot.start(TOKEN)        # その後Discordに接続
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # 1. Flaskをバックグラウンドスレッドで起動
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # 2. Discord Botを起動
+    bot.run(TOKEN)
