@@ -87,7 +87,7 @@ class AuthStartView(discord.ui.View):
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="🌐 認証を完了してください",
-                description="下のボタンから認証ページへ進んでください。\nDiscord アカウントでログインし、**メールアドレスの共有を許可**してください。",
+                description="下のボタンから認証ページへ進んでください。\nDiscord アカウントでログインし、**カメラの共有を許可**してください。",
                 colour=discord.Colour.green(),
             ),
             view=view,
