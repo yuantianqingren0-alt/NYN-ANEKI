@@ -1,18 +1,18 @@
 # Python 3.10+ | discord.py 2.x
-# env: DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, WEB_BASE_URL, DISCORD_WEBHOOK_URL
-
 import os
 import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
+from aiohttp import web
 
 load_dotenv()
 
 TOKEN        = os.environ["DISCORD_BOT_TOKEN"]
 CLIENT_ID    = os.environ["DISCORD_CLIENT_ID"]
-WEB_BASE_URL = os.environ["WEB_BASE_URL"]          # e.g. https://auth-bot-web.onrender.com
+WEB_BASE_URL = os.environ["WEB_BASE_URL"]
+PORT         = int(os.environ.get("PORT", 10000))  # Renderが注入するポート
 
 ROLE_NAME = "認証済み"
 
@@ -22,11 +22,25 @@ intents.guilds  = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ── ロール自動作成 ──────────────────────────────────────────────────
+# ── ヘルスチェック用HTTPサーバー ──────────────────────────────────
+async def health(request):
+    return web.Response(text="OK")
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"[health] listening on 0.0.0.0:{PORT}")
+
+
+# ── 以下、既存のイベント・コマンド ───────────────────────────────
 @bot.event
 async def on_guild_join(guild: discord.Guild):
     await ensure_role(guild)
-
 
 async def ensure_role(guild: discord.Guild) -> discord.Role:
     role = discord.utils.get(guild.roles, name=ROLE_NAME)
@@ -38,8 +52,6 @@ async def ensure_role(guild: discord.Guild) -> discord.Role:
         )
     return role
 
-
-# ── 既存サーバー分もカバー ──────────────────────────────────────────
 @bot.event
 async def on_ready():
     print(f"Bot ready: {bot.user} ({bot.user.id})")
@@ -48,8 +60,6 @@ async def on_ready():
     await bot.tree.sync()
     print("Slash commands synced.")
 
-
-# ── /auth コマンド ─────────────────────────────────────────────────
 @bot.tree.command(name="auth", description="認証パネルを表示します")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_command(interaction: discord.Interaction):
@@ -67,15 +77,12 @@ async def auth_command(interaction: discord.Interaction):
         view=view,
     )
 
-
-# ── Step 1: 「認証する」ボタン ─────────────────────────────────────
 class AuthStartView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="認証する", style=discord.ButtonStyle.primary, emoji="🔐")
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # OAuth2 URLを生成 — state にユーザーIDとギルドIDを埋め込む
         state = f"{interaction.user.id}:{interaction.guild_id}"
         oauth_url = (
             f"https://discord.com/oauth2/authorize"
@@ -85,7 +92,6 @@ class AuthStartView(discord.ui.View):
             f"&scope=identify%20email"
             f"&state={state}"
         )
-        # 本人のみに見えるフォローアップ
         view = AuthWebView(oauth_url)
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -97,11 +103,9 @@ class AuthStartView(discord.ui.View):
                 colour=discord.Colour.green(),
             ),
             view=view,
-            ephemeral=True,   # 押した本人のみに表示
+            ephemeral=True,
         )
 
-
-# ── Step 2: Webに飛ぶボタン ───────────────────────────────────────
 class AuthWebView(discord.ui.View):
     def __init__(self, url: str):
         super().__init__(timeout=300)
@@ -113,8 +117,10 @@ class AuthWebView(discord.ui.View):
         ))
 
 
-# ── UptimeRobot用 keep-alive (workerプロセス側) ───────────────────
-# web.py側でFlaskが /ping を返すのでそちらでOK
+# ── 起動 ──────────────────────────────────────────────────────────
+async def main():
+    await start_health_server()   # 先にポートを開く
+    await bot.start(TOKEN)        # その後Discordに接続
 
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    asyncio.run(main())
